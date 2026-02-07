@@ -151,6 +151,66 @@ export class APIServer {
       }
     });
 
+    // === SIDE QUEST: Dynamic MAS Update ===
+
+    // Add dynamic rule via prompt
+    this.routes.push({
+      method: 'POST',
+      pattern: /^\/mas\/update$/,
+      handler: async (req) => {
+        const body = await req.json() as { prompt: string };
+        if (!body.prompt) {
+          return this.json({ success: false, error: 'Prompt required' }, 400);
+        }
+
+        const { dynamicRules } = await import('./mas-update');
+        const rule = dynamicRules.addRule(body.prompt);
+
+        if (rule) {
+          return this.json({
+            success: true,
+            message: 'MAS behavior updated',
+            rule: {
+              id: rule.id,
+              triggers: rule.trigger.keywords,
+              action: rule.action.type,
+              tag: rule.action.tag
+            }
+          });
+        }
+        return this.json({ success: false, error: 'Could not parse update prompt' }, 400);
+      }
+    });
+
+    // List dynamic rules
+    this.routes.push({
+      method: 'GET',
+      pattern: /^\/mas\/rules$/,
+      handler: async () => {
+        const { dynamicRules } = await import('./mas-update');
+        return this.json({ success: true, rules: dynamicRules.getRules() });
+      }
+    });
+
+    // Delete dynamic rule
+    this.routes.push({
+      method: 'DELETE',
+      pattern: /^\/mas\/rules\/([^/]+)$/,
+      handler: async (req) => {
+        const url = new URL(req.url);
+        const match = url.pathname.match(/^\/mas\/rules\/([^/]+)$/);
+        const ruleId = match?.[1];
+
+        if (!ruleId) {
+          return this.json({ success: false, error: 'Rule ID required' }, 400);
+        }
+
+        const { dynamicRules } = await import('./mas-update');
+        const deactivated = dynamicRules.deactivateRule(ruleId);
+        return this.json({ success: deactivated });
+      }
+    });
+
     // === SIMULATION & JUDGE ROUTES (CI/CD Integration) ===
 
     // Initialize scenarios

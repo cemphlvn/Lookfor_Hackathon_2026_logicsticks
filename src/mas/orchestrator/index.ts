@@ -8,6 +8,7 @@ import { classifyMessage, IntentClassification } from '../../meta/intent-extract
 import { MASConfig, AgentConfig, RoutingRule, EscalationConfig } from '../../meta/agent-generator';
 import { Session, memoryStore } from '../memory';
 import { tracer } from '../tracing';
+import { applyDynamicRules } from '../../api/mas-update';
 
 export interface RoutingResult {
   targetAgent: AgentConfig;
@@ -113,6 +114,26 @@ export class Orchestrator {
     }
 
     const messageLower = message.toLowerCase();
+
+    // SIDE QUEST: Check dynamic rules first
+    const dynamicResult = applyDynamicRules(message);
+    if (dynamicResult.escalate) {
+      const reason = dynamicResult.reason || 'Dynamic rule triggered escalation';
+      const summary = this.buildEscalationSummary(session);
+      if (dynamicResult.tag) {
+        (summary as any).tag = dynamicResult.tag;
+      }
+
+      memoryStore.escalate(sessionId, reason, summary);
+      tracer.traceEscalation(sessionId, reason, summary);
+
+      return {
+        escalated: true,
+        reason,
+        customerMessage: this.escalationConfig.customerMessage,
+        internalSummary: summary
+      };
+    }
 
     // Direct escalation keyword detection
     const escalationKeywords = ['human', 'real person', 'manager', 'supervisor', 'live agent'];

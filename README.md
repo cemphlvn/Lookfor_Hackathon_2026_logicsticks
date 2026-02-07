@@ -1,129 +1,200 @@
-# NatPat Support Agent — Lookfor Hackathon 2026
+# Lookfor Hackathon 2026 — logicsticks
 
 > Multi-Agent System for e-commerce email support automation
 
-**Team**: logicsticks
-**Submission**: Step 1 (MAS Instance)
-
 ---
 
-## Hackathon Requirements
-
-| # | Requirement | Status | Implementation |
-|---|-------------|--------|----------------|
-| 1 | **Session Start** | ✅ | `MASRuntime.startSession()` — captures email, name, Shopify ID |
-| 2 | **Continuous Memory** | ✅ | `MemoryStore` — tracks messages, entities, context across turns |
-| 3 | **Observable Actions** | ✅ | `Tracer` — logs every tool call with inputs/outputs/timing |
-| 4 | **Escalation** | ✅ | Detects "human/manager/supervisor" → stops auto-reply, builds summary |
-
----
-
-## Quick Start
+## How to Run
 
 ### Docker (Recommended)
 
 ```bash
+# Clone and configure
+git clone https://github.com/cemphlvn/Lookfor_Hackathon_2026_logicsticks.git
+cd Lookfor_Hackathon_2026_logicsticks
 cp .env.example .env
-# Add your ANTHROPIC_API_KEY to .env
 
+# Add your API keys to .env:
+# ANTHROPIC_API_KEY=sk-ant-...
+# API_URL=<provided on-site>
+
+# Run
 docker compose up
 ```
+
+Dashboard: http://localhost:3001
 
 ### Local Development
 
 ```bash
 npm install
-npm run build
-
 export ANTHROPIC_API_KEY=sk-ant-...
-
-# Run with mock API (no backend needed)
-USE_MOCK_API=true npm run demo
-
-# Or run tests
-npm test
+export API_URL=<provided on-site>
+npm run start:demo
 ```
 
 ---
 
-## Architecture
+## High-Level Architecture
 
 ```
-Customer Email
-     ↓
-┌─────────────────────────────────────────────────────────────┐
-│                      ORCHESTRATOR                            │
-│  1. Classify intent (ORDER_STATUS, REFUND, ESCALATION...)   │
-│  2. Check escalation keywords → stop if human requested     │
-│  3. Route to specialized agent                              │
-└─────────────────────────────────────────────────────────────┘
-     ↓
-┌─────────────────────────────────────────────────────────────┐
-│                    AGENT EXECUTOR                            │
-│  • System prompt (brand voice, boundaries)                   │
-│  • Available tools (Shopify/Skio APIs)                       │
-│  • LLM brain (Claude) decides what to do                     │
-└─────────────────────────────────────────────────────────────┘
-     ↓
-┌─────────────────────────────────────────────────────────────┐
-│                    TOOL CLIENT                               │
-│  14 Shopify tools + 5 Skio tools                             │
-│  • get_customer_orders, get_order_details                    │
-│  • refund_order, cancel_order                                │
-│  • get_subscription_status, pause_subscription               │
-└─────────────────────────────────────────────────────────────┘
-     ↓
-┌─────────────────────────────────────────────────────────────┐
-│                     MEMORY STORE                             │
-│  • Messages (customer + agent)                               │
-│  • Extracted entities (order #, email, dates)                │
-│  • Cached tool results                                       │
-│  • Intent history                                            │
-└─────────────────────────────────────────────────────────────┘
-     ↓
-Response to Customer (or escalation summary for human agent)
+                              ┌─────────────────────────────────────┐
+                              │         API SERVER (:3001)          │
+                              │   POST /session/start               │
+                              │   POST /session/:id/message         │
+                              │   POST /mas/update (Side Quest)     │
+                              └─────────────────────────────────────┘
+                                              │
+                                              ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              MAS RUNTIME                                     │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  ┌──────────────────┐    ┌──────────────────┐    ┌──────────────────┐       │
+│  │  MEMORY STORE    │    │   ORCHESTRATOR   │    │     TRACER       │       │
+│  │                  │    │                  │    │                  │       │
+│  │ • Session state  │◄───│ • Intent classify│───►│ • Tool calls     │       │
+│  │ • Messages       │    │ • Dynamic rules  │    │ • Routing events │       │
+│  │ • Entities       │    │ • Agent routing  │    │ • Escalations    │       │
+│  │ • Context        │    │ • Escalation     │    │ • Timeline       │       │
+│  └──────────────────┘    └────────┬─────────┘    └──────────────────┘       │
+│                                   │                                          │
+│                                   ▼                                          │
+│  ┌──────────────────────────────────────────────────────────────────┐       │
+│  │                         AGENT EXECUTOR                            │       │
+│  │                                                                   │       │
+│  │   ┌─────────────┐  ┌─────────────┐  ┌─────────────┐              │       │
+│  │   │ Order Agent │  │ Refund Agent│  │ Sub Agent   │  ...         │       │
+│  │   │             │  │             │  │             │              │       │
+│  │   │ LLM Brain   │  │ LLM Brain   │  │ LLM Brain   │              │       │
+│  │   │ + Tools     │  │ + Tools     │  │ + Tools     │              │       │
+│  │   └─────────────┘  └─────────────┘  └─────────────┘              │       │
+│  └──────────────────────────────────────────────────────────────────┘       │
+│                                   │                                          │
+│                                   ▼                                          │
+│  ┌──────────────────────────────────────────────────────────────────┐       │
+│  │                         TOOL CLIENT                               │       │
+│  │   Shopify: get_orders, refund, cancel, update_address, etc.      │       │
+│  │   Skio: get_subscription, cancel, pause, skip, unpause           │       │
+│  └──────────────────────────────────────────────────────────────────┘       │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
+
+### Agents
+
+| Agent | Responsibility | Tools |
+|-------|----------------|-------|
+| `order-tracking-agent` | Order status, tracking | `get_customer_orders`, `get_order_details` |
+| `refund-processing-agent` | Refunds, returns | `get_order_details`, `refund_order`, `create_return` |
+| `subscription-management-agent` | Sub status, changes | `get_subscription_status`, `pause`, `skip` |
+| `subscription-cancellation-agent` | Cancellations | `get_subscription_status`, `cancel_subscription` |
+| `address-update-agent` | Shipping updates | `get_order_details`, `update_shipping_address` |
+| `product-info-agent` | Product questions | `get_product_details`, `get_recommendations` |
+| `general-support-agent` | Fallback | All tools |
+
+### Routing
+
+1. **Intent Classification**: Keywords → intent (ORDER_STATUS, REFUND_REQUEST, etc.)
+2. **Dynamic Rules**: Side quest rules checked first (can override routing)
+3. **Agent Selection**: Intent → routing rules → target agent
+4. **Session Continuity**: Stay with current agent if related intent
+
+### Tool Calls
+
+- All tools follow Lookfor API spec (HTTP 200, `{ success, data/error }`)
+- Tool client validates params against schema
+- Results traced with inputs/outputs
+- Failures handled gracefully with retry or escalation
 
 ---
 
-## Intent Classification
+## Escalation Implementation
 
-12 intents with priority-based keyword matching:
+### Triggers
 
-| Intent | Priority | Example Trigger |
-|--------|----------|-----------------|
-| ESCALATION_REQUEST | 15 | "speak to human", "talk to manager" |
-| SUBSCRIPTION_CANCEL | 10 | "cancel subscription", "unsubscribe" |
-| SUBSCRIPTION_PAUSE | 10 | "pause subscription", "skip next order" |
-| REFUND_REQUEST | 8 | "refund", "money back" |
-| RETURN_REQUEST | 7 | "return", "exchange", "wrong item" |
-| CANCEL_ORDER | 6 | "cancel order" |
-| SUBSCRIPTION_INQUIRY | 5 | "subscription status", "billing date" |
-| SHIPPING_ADDRESS | 4 | "change address", "wrong address" |
-| ORDER_STATUS | 3 | "where is my order", "tracking" |
-| PRODUCT_INQUIRY | 2 | "how to use", "ingredients" |
-| DISCOUNT_REQUEST | 2 | "coupon", "promo code" |
-| GENERAL_INQUIRY | 1 | "help", "question" |
+1. **Direct Request**: Customer says "human", "manager", "supervisor", "real person"
+2. **Phrase Detection**: "speak to", "talk to", "transfer to"
+3. **Dynamic Rules**: Side quest rules can trigger escalation
+4. **Uncertainty**: 3+ different intents in single session
+
+### Process
+
+```typescript
+// 1. Detect escalation trigger
+if (shouldEscalate) {
+  // 2. Build internal summary
+  const summary = {
+    sessionId, customer, messageCount,
+    toolCallCount, intents, mentionedOrders,
+    currentAgent, tag // from dynamic rule
+  };
+
+  // 3. Mark session as escalated
+  memoryStore.escalate(sessionId, reason, summary);
+
+  // 4. Stop auto-reply
+  session.context.escalated = true;
+
+  // 5. Return customer message
+  return "I understand this needs special attention. I'm connecting you with our team...";
+}
+```
+
+### Post-Escalation
+
+- **No further auto-replies**: `isEscalated()` check blocks processing
+- **Summary available**: `GET /session/:id/summary` returns structured handoff data
+- **Trace preserved**: Full history available for human agent
 
 ---
 
-## Testing
+## Side Quest: Dynamic MAS Update
 
-### Unit Tests (19 tests)
+Update MAS behavior at runtime via natural language prompts.
+
+### API
+
 ```bash
-npm test
+# Add rule
+curl -X POST http://localhost:3001/mas/update \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "If a customer wants to update their order address, do not update it directly. Mark the order as NEEDS_ATTENTION and escalate the situation."}'
+
+# List rules
+curl http://localhost:3001/mas/rules
+
+# Delete rule
+curl -X DELETE http://localhost:3001/mas/rules/{ruleId}
 ```
 
-### Judge Suite (19 scenarios)
-```bash
-USE_MOCK_API=true npm run judge
+### Example Prompts
+
+```
+"If a customer wants to update their order address, do not update it directly. Mark the order as NEEDS_ATTENTION and escalate the situation."
+
+"When a customer mentions legal action, immediately escalate."
+
+"Block all refund requests over $500."
 ```
 
-### Continuous Audit
-```bash
-npm run audit        # Runs forever, 60s intervals
-npm run audit:once   # Single run
-```
+### How It Works
+
+1. Prompt parsed into trigger keywords + action
+2. Rule stored in dynamic rule store
+3. Every message checked against rules BEFORE normal routing
+4. Matching rule triggers escalation/block/redirect
+
+---
+
+## Requirements Checklist
+
+| # | Requirement | Implementation |
+|---|-------------|----------------|
+| 1 | **Session Start** | `POST /session/start` accepts email, name, Shopify ID |
+| 2 | **Continuous Memory** | `MemoryStore` tracks messages, entities, context |
+| 3 | **Observable Actions** | `Tracer` logs all tool calls, routing, escalations |
+| 4 | **Escalation** | Keyword detection + dynamic rules → stops auto-reply |
 
 ---
 
@@ -131,74 +202,47 @@ npm run audit:once   # Single run
 
 ```
 src/
-├── mas/                    # Runtime (Step 1)
-│   ├── runtime.ts          # Main MAS runtime
-│   ├── orchestrator/       # Intent routing + escalation
-│   ├── agents/             # LLM executor
-│   ├── tools/              # API client
-│   ├── memory/             # Session memory
-│   └── tracing/            # Observable actions
-├── meta/                   # Generator (Step 2)
-│   ├── intent-extractor/   # Learn patterns from tickets
-│   ├── agent-generator/    # Create agent configs
-│   ├── workflow-parser/    # Parse brand workflows
-│   └── mas-builder/        # Assemble MAS
-└── api/
-    ├── server.ts           # HTTP API
-    └── mock-lookfor.ts     # Mock for demos
+├── api/
+│   ├── server.ts          # HTTP endpoints
+│   ├── mas-update.ts      # Side quest: dynamic rules
+│   └── mock-lookfor.ts    # Mock API for testing
+├── mas/
+│   ├── runtime.ts         # Main MAS runtime
+│   ├── orchestrator/      # Intent routing + escalation
+│   ├── agents/            # LLM executor
+│   ├── memory/            # Session memory
+│   ├── tools/             # API client
+│   └── tracing/           # Observability
+├── meta/
+│   ├── intent-extractor/  # Intent classification
+│   ├── agent-generator/   # Agent config types
+│   └── mas-builder/       # Build MAS from config
+└── brands/
+    └── natpat.ts          # Brand-specific config
 ```
 
 ---
 
-## API Endpoints
-
-```
-POST /session/start
-  { customerEmail, firstName, lastName, shopifyCustomerId }
-  → { sessionId }
-
-POST /session/:id/message
-  { message }
-  → { message, escalated, toolsCalled }
-
-GET /session/:id
-  → { session with full history }
-
-GET /session/:id/trace
-  → { observable action log }
-```
-
----
-
-## Demo Customers
-
-Test with mock API using:
-- `baki@lookfor.ai`
-- `ebrar@lookfor.ai`
+## Testing
 
 ```bash
-USE_MOCK_API=true npm run demo
+# Unit tests
+npm test
+
+# Judge suite (all requirements)
+npm run judge:ci
+
+# Interactive playground
+npm run playground
 ```
 
 ---
 
-## Self-Referential Design
+## Environment Variables
 
-This repo is **Step 1** — a generated MAS instance.
-
-It was created by **Step 2** (meta-MAS generator) at:
-https://github.com/cemphlvn/lookfor-hackathon-2026
-
-The meta-system:
-1. Parses brand workflows
-2. Extracts intent patterns from historical tickets
-3. Generates agent configurations
-4. Assembles complete MAS
-
-This design ensures correctness: the abstraction (Step 2) validates the instance (Step 1).
-
----
-
-## License
-
-MIT
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `ANTHROPIC_API_KEY` | Yes | Claude API key |
+| `API_URL` | Yes | Lookfor tool API base URL |
+| `PORT` | No | Server port (default: 3001) |
+| `USE_MOCK_API` | No | Use mock API for testing |
